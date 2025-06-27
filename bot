@@ -18,7 +18,7 @@ command = "rtl_fm -M fm -f 163.825M -s 22050 | multimon-ng -t raw -a POCSAG1200 
 p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True)
 
 # init mem
-message_memory = deque(maxlen=10)
+message_memory = deque(maxlen=30)
 
 def process(message):
     arr = message.split(maxsplit=8)
