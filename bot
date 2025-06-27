@@ -1,0 +1,84 @@
+#!/bin/python3
+
+import requests
+import subprocess
+import sqlite3
+from collections import deque
+from datetime import datetime
+import os
+
+# init db
+db_path = 'feuerwehren.db'
+connection = sqlite3.connect(db_path)
+cursor = connection.cursor()
+
+# init antenna
+# -g 60 -l 310
+command = "rtl_fm -M fm -f 163.825M -s 22050 | multimon-ng -t raw -a POCSAG1200 -f alpha -C DE /dev/stdin --timestamp"
+p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True)
+
+# init mem
+message_memory = deque(maxlen=10)
+
+def process(message):
+    arr = message.split(maxsplit=8)
+    date = arr[0]        # "yyyy-mm-dd"
+    time = arr[1][:-1]   # "hh:mm:ss"
+    address = arr[4]
+    text = arr[8].strip()
+
+    while text.endswith("<NUL>"):
+        text = text.removesuffix("<NUL>")
+
+    if address[0] == '7':
+        feuerwehr = "BF Bozen"
+    else:
+        ffnr = address[1:4]
+        cursor.execute(f"SELECT feuerwehr FROM feuerwehren WHERE nummer = {ffnr}")
+        feuerwehr_result = cursor.fetchone()
+        feuerwehr = feuerwehr_result[0] if feuerwehr_result else "<Unbekannt>"
+        feuerwehr = "FF " + feuerwehr
+    
+    timestamp = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M:%S")
+
+    return timestamp, address, feuerwehr, text
+
+with open(os.path.expanduser('/etc/pocsagbot/KEY'), 'r') as f:
+    TELEGRAM_TOKEN = f.read().strip()
+
+with open(os.path.expanduser('/etc/pocsagbot/CHATID'), 'r') as f:
+    TELEGRAM_CHATID = int(f.read().strip())
+
+while True:
+    data = p.stdout.readline()
+    if not data:
+        break
+
+    if b'LNZ' in data:
+        print("message received", flush=True)
+        print("    " + str(data), flush=True)
+        data = data.decode()
+
+        # process
+        timestamp, address, feuerwehr, text = process(data)
+        message = f"{str(timestamp)} | {address}\n{feuerwehr} - *<Unbekannte Schleife>*\n{text}"
+
+        # memory check
+        duplicate_found = False
+        for msg in message_memory:
+            msg_time = msg['timestamp']
+            time_diff = (timestamp - msg_time).total_seconds()
+            if msg['text'] == text and msg['address'] == address and time_diff <= 45:
+                duplicate_found = True
+                break
+        if duplicate_found:
+            print("    duplicate message detected within 30 seconds; skipping.", flush=True)
+            continue
+        message_memory.append({'text': text, 'address': address, 'timestamp': timestamp})
+
+        # send
+        result = requests.post(
+            url=f"https://api.telegram.org/{TELEGRAM_TOKEN}/sendMessage",
+            data={'chat_id': TELEGRAM_CHATID, 'text': message, 'parse_mode': 'Markdown'}
+        )
+        print("    sent: " + message.replace("\n", ""), flush=True)
