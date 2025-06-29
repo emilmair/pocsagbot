@@ -8,7 +8,8 @@ from datetime import datetime
 import os
 
 # init db
-db_path = 'feuerwehren.db'
+script_dir = os.path.dirname(os.path.abspath(__file__))
+db_path = os.path.join(script_dir, 'feuerwehren.db')
 connection = sqlite3.connect(db_path)
 cursor = connection.cursor()
 
